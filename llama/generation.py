@@ -107,7 +107,7 @@ class Llama:
             "params/temp.txt"
             ckpt_path = "params/llama2/llama-2-7b-chat/consolidated.00.pth"
             with download_file_to_bytestream(ckpt_path) as f:
-                checkpoint = torch.load(f, map_location="cpu")
+                checkpoint = torch.load(io.BytesIO(f.read()), map_location="cpu")
         else:
             checkpoints = sorted(Path(ckpt_dir).glob("*.pth"))
             assert len(checkpoints) > 0, f"no checkpoint files found in {ckpt_dir}"
