@@ -7,7 +7,7 @@ import sys
 import time
 from pathlib import Path
 from typing import List, Literal, Optional, Tuple, TypedDict
-
+from s3fs.core import S3FileSystem
 import torch
 import torch.nn.functional as F
 from fairscale.nn.model_parallel.initialize import (
@@ -15,9 +15,11 @@ from fairscale.nn.model_parallel.initialize import (
     initialize_model_parallel,
     model_parallel_is_initialized,
 )
-
+import io
 from llama.model import ModelArgs, Transformer
 from llama.tokenizer import Tokenizer
+from contextlib import closing
+
 
 Role = Literal["system", "user", "assistant"]
 
@@ -48,6 +50,26 @@ You are a helpful, respectful and honest assistant. Always answer as helpfully a
 
 If a question does not make any sense, or is not factually coherent, explain why instead of answering something not correct. If you don't know the answer to a question, please don't share false information."""
 
+AICHOR_INPUT_PATH = "s3://truemed-de65283dde19416d-inputs/"
+
+def download_file_to_bytestream(remote_filename: str) -> io.BytesIO:
+    s3_endpoint = os.environ.get("S3_ENDPOINT")
+    s3 = S3FileSystem(client_kwargs={"endpoint_url": s3_endpoint})
+    remote_filepath = os.path.join(AICHOR_INPUT_PATH, remote_filename)
+    
+    # Open remote file and read it into memory
+    with s3.open(remote_filepath, 'rb') as f:
+        data = f.read()
+
+    # Create BytesIO object and write data to it
+    bytestream = io.BytesIO()
+    bytestream.write(data)
+    
+    # Reset stream position to the beginning
+    bytestream.seek(0)
+    
+    # Instead of returning bytestream, we return a context manager that will close the stream when done.
+    return closing(bytestream)
 
 class Llama:
     @staticmethod
@@ -75,15 +97,27 @@ class Llama:
             sys.stdout = open(os.devnull, "w")
 
         start_time = time.time()
-        checkpoints = sorted(Path(ckpt_dir).glob("*.pth"))
-        assert len(checkpoints) > 0, f"no checkpoint files found in {ckpt_dir}"
-        assert model_parallel_size == len(
-            checkpoints
-        ), f"Loading a checkpoint for MP={len(checkpoints)} but world size is {model_parallel_size}"
-        ckpt_path = checkpoints[get_model_parallel_rank()]
-        checkpoint = torch.load(ckpt_path, map_location="cpu")
-        with open(Path(ckpt_dir) / "params.json", "r") as f:
-            params = json.loads(f.read())
+
+        if True:
+
+            with download_file_to_bytestream("params/llama2/llama-2-7b-chat/params.json") as f:
+                data = f.read()
+                params = json.loads(data)
+
+            "params/temp.txt"
+            ckpt_path = "params/llama2/llama-2-7b-chat/consolidated.00.pth"
+            with download_file_to_bytestream(ckpt_path) as f:
+                checkpoint = torch.load(f, map_location="cpu")
+        else:
+            checkpoints = sorted(Path(ckpt_dir).glob("*.pth"))
+            assert len(checkpoints) > 0, f"no checkpoint files found in {ckpt_dir}"
+            assert model_parallel_size == len(
+                checkpoints
+            ), f"Loading a checkpoint for MP={len(checkpoints)} but world size is {model_parallel_size}"
+            ckpt_path = checkpoints[get_model_parallel_rank()]
+            checkpoint = torch.load(ckpt_path, map_location="cpu")
+            with open(Path(ckpt_dir) / "params.json", "r") as f:
+                params = json.loads(f.read())
 
         model_args: ModelArgs = ModelArgs(
             max_seq_len=max_seq_len,
